@@ -88,3 +88,42 @@ def sig_kernel_Gram_varpar(double[:,:,:,:] G_static, bint sym=False, bint _naive
 							#K[l,m,i+1,j+1] = K[l,m,i+1,j] + K[l,m,i,j+1] - K[l,m,i,j] + (exp(0.5*G_static[l,m,i,j])-1.)*(K[l,m,i+1,j] + K[l,m,i,j+1])
 	
 	return np.array(K)
+
+
+def sig_kernel_Gram_varpar_const(double[:,:,:,:] G_static, double _lambda, bint sym=False, bint _naive_solver=False):
+	cdef int A = G_static.shape[0]
+	cdef int B = G_static.shape[1]
+	cdef int M = G_static.shape[2]
+	cdef int N = G_static.shape[3]
+	cdef int i, j, l, m
+	cdef double _aux
+	cdef double[:,:,:,:] K = np.zeros((A,B,M+1,N+1), dtype=np.float64)
+
+	for l in range(A):
+		for m in range(B):
+
+			for i in range(M+1):
+				K[l,m,i,0] = 1.
+				# K[l,m,i,1] = 1.
+
+			for j in range(N+1):
+				K[l,m,0,j] = 1.
+				# K[l,m,1,j] = 1.
+			# raise ValueError()
+			for i in range(M):
+				for j in range(N):
+					_aux = G_static[l,m,i,j] * _lambda - 1.
+					# fixme: central difference performance is worse
+					# K[l,m,i+1,j+1] = K[l,m,i+1,j-1] + K[l,m,i-1,j+1] - K[l,m,i-1,j-1] + 4 * _aux * K[l,m,i,j]
+
+					# forward difference
+
+					K[l, m, i + 1, j + 1] = K[l, m, i + 1, j] + K[l, m, i, j + 1] + K[l, m, i, j] * _aux
+
+					# fixme npn-naive implementation (no clue where it's coming from)
+					# K[l, m, i + 1, j + 1] = \
+					# 	(K[l, m, i + 1, j] + K[l, m, i, j + 1]) * (
+					# 			1. + 0.5 * _aux + (1. / 12) * _aux ** 2
+					# 	) - K[l, m, i, j] * (1. - (1. / 12) * _aux ** 2)
+
+	return np.array(K)
