@@ -1,6 +1,9 @@
 import numpy as np
 import torch
 import torch.cuda
+from scipy.stats import cauchy
+from sklearn.kernel_approximation import PolynomialCountSketch
+
 from cython_backend import sig_kernel_batch_varpar, sig_kernel_Gram_varpar, sig_kernel_Gram_varpar_const
 from numba import cuda
 
@@ -30,6 +33,86 @@ class LinearKernel():
                   - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
         """
         return torch.einsum('ipk,jqk->ijpq', X, Y)
+
+
+class TensorSketchKernel:
+
+    def __init__(self, degree=3, gamma=1., dims=20):
+        self.ps = PolynomialCountSketch(degree=degree, gamma=gamma, n_components=dims)
+
+    def transform(self, X):
+        return torch.from_numpy(self.ps.fit_transform(X))
+
+    def batch_kernel(self, X, Y):
+        """Input:
+                  - X: torch tensor of shape (batch, length_X, dim),
+                  - Y: torch tensor of shape (batch, length_Y, dim)
+           Output:
+                  - matrix k(X^i_s,Y^i_t) of shape (batch, length_X, length_Y)
+        """
+        X_z = torch.stack([self.transform(x) for x in X])
+        Y_z = torch.stack([self.transform(y) for y in Y])
+        return torch.bmm(X_z, Y_z.permute(0, 2, 1))
+
+    def Gram_matrix(self, X, Y):
+        """Input:
+                  - X: torch tensor of shape (batch_X, length_X, dim),
+                  - Y: torch tensor of shape (batch_Y, length_Y, dim)
+           Output:
+                  - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
+        """
+        X_z = torch.stack([self.transform(x) for x in X])
+        Y_z = torch.stack([self.transform(y) for y in Y])
+        return torch.einsum('ipk,jqk->ijpq', X_z, Y_z)
+
+
+class RFFKernel:
+
+    def __init__(self, length, gamma=1, dims=10, metric="rbf"):
+        self.length = length
+        self.metric = metric
+        self.dims = dims
+        self.gamma = gamma
+
+        self.u, self.w = self._fit()
+
+    def transform(self, X):
+        """ Transforms the data X (n_samples, n_features) to the new map space Z(X) (n_samples, n_components)"""
+        # Compute feature map Z(x):
+        Z = np.sqrt(2 / self.dims) * np.cos((X.mm(self.w.T) + self.u[np.newaxis, :]))
+        return Z
+
+    def batch_kernel(self, X, Y):
+        """Input:
+                  - X: torch tensor of shape (batch, length_X, dim),
+                  - Y: torch tensor of shape (batch, length_Y, dim)
+           Output:
+                  - matrix k(X^i_s,Y^i_t) of shape (batch, length_X, length_Y)
+        """
+        X_z = torch.stack([self.transform(x) for x in X])
+        Y_z = torch.stack([self.transform(y) for y in Y])
+        return torch.bmm(X_z, Y_z.permute(0, 2, 1))
+
+    def Gram_matrix(self, X, Y):
+        """Input:
+                  - X: torch tensor of shape (batch_X, length_X, dim),
+                  - Y: torch tensor of shape (batch_Y, length_Y, dim)
+           Output:
+                  - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
+        """
+        X_z = torch.stack([self.transform(x) for x in X])
+        Y_z = torch.stack([self.transform(y) for y in Y])
+        return torch.einsum('ipk,jqk->ijpq', X_z, Y_z)
+
+    def _fit(self):
+        if self.metric == "rbf":
+            w = np.sqrt(2 * self.gamma) * np.random.normal(size=(self.dims, self.length))
+        elif self.metric == "laplace":
+            w = cauchy.rvs(scale=self.gamma, size=(self.dims, self.length))
+
+        # Generate D iid samples from Uniform(0,2*pi)
+        u = 2 * np.pi * np.random.rand(self.dims)
+        return torch.from_numpy(u), torch.from_numpy(w)
 
 
 class RBFKernel():
@@ -70,6 +153,8 @@ class RBFKernel():
         dist = -2. * torch.einsum('ipk,jqk->ijpq', X, Y)
         dist += torch.reshape(Xs, (A, 1, M, 1)) + torch.reshape(Ys, (1, B, 1, N))
         return torch.exp(-dist / self.sigma)
+
+
 # ===========================================================================================================
 
 
@@ -152,15 +237,17 @@ class _SigKernel(torch.autograd.Function):
         NN = (2 ** dyadic_order) * (N - 1)
 
         # computing dsdt k(X^i_s,Y^i_t)
-        G_static = static_kernel.batch_kernel(X,Y)
-        G_static_ = G_static[:,1:,1:] + G_static[:,:-1,:-1] - G_static[:,1:,:-1] - G_static[:,:-1,1:] 
-        G_static_ = tile(tile(G_static_,1,2**dyadic_order)/float(2**dyadic_order),2,2**dyadic_order)/float(2**dyadic_order)
+        G_static = static_kernel.batch_kernel(X, Y)
+        G_static_ = G_static[:, 1:, 1:] + G_static[:, :-1, :-1] - G_static[:, 1:, :-1] - G_static[:, :-1, 1:]
+        G_static_ = tile(tile(G_static_, 1, 2 ** dyadic_order) / float(2 ** dyadic_order), 2,
+                         2 ** dyadic_order) / float(2 ** dyadic_order)
 
         # if on GPU
         if X.device.type == 'cuda':
 
-            assert max(MM+1,NN+1) < 1024, 'n must be lowered or data must be moved to CPU as the current choice of n makes exceed the thread limit'
-            
+            assert max(MM + 1,
+                       NN + 1) < 1024, 'n must be lowered or data must be moved to CPU as the current choice of n makes exceed the thread limit'
+
             # cuda parameters
             threads_per_block = max(MM + 1, NN + 1)
             n_anti_diagonals = 2 * threads_per_block - 1
@@ -171,14 +258,16 @@ class _SigKernel(torch.autograd.Function):
             K[:, :, 0] = 1.
 
             # Compute the forward signature kernel
-            compute_sig_kernel_batch_varpar_from_increments_cuda[A, threads_per_block](cuda.as_cuda_array(G_static_.detach()),
-                                                                                       MM+1, NN+1, n_anti_diagonals,
-                                                                                       cuda.as_cuda_array(K), _naive_solver)
-            K = K[:,:-1,:-1]
+            compute_sig_kernel_batch_varpar_from_increments_cuda[A, threads_per_block](
+                cuda.as_cuda_array(G_static_.detach()),
+                MM + 1, NN + 1, n_anti_diagonals,
+                cuda.as_cuda_array(K), _naive_solver)
+            K = K[:, :-1, :-1]
 
         # if on CPU
         else:
-            K = torch.tensor(sig_kernel_batch_varpar(G_static_.detach().numpy(), _naive_solver), dtype=G_static.dtype, device=G_static.device)
+            K = torch.tensor(sig_kernel_batch_varpar(G_static_.detach().numpy(), _naive_solver), dtype=G_static.dtype,
+                             device=G_static.device)
 
         ctx.save_for_backward(X, Y, G_static, K)
         ctx.static_kernel = static_kernel
@@ -437,7 +526,6 @@ quad_w_x_16_standard = [
     (0.0271524594117541, 0.9894009349916499),
 ]
 
-
 # https://reader.elsevier.com/reader/sd/pii/0021999181900991?token=0A7DC74E3914BF9665B9FFED1E759F355C0292BE74919C13D6ECDAF2FC3C72008DFA8BA7189615B6AD6A0CFDAD53B2A5&originRegion=eu-west-1&originCreation=20220626174347
 # w(x) = xe^{-^2}, from 0 to inf
 quad_w_x_16 = [
@@ -475,6 +563,8 @@ def flip(x, dim):
     x = x.view(x.size(0), x.size(1), -1)[:,
         getattr(torch.arange(x.size(1) - 1, -1, -1), ('cpu', 'cuda')[x.is_cuda])().long(), :]
     return x.view(xsize)
+
+
 # ===========================================================================================================
 def tile(a, dim, n_tile):
     init_dim = a.size(dim)

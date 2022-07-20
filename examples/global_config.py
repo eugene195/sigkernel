@@ -24,6 +24,17 @@ add_time_axis = [
     True,
     # False
 ]
+rff_metric = [
+    "rbf",
+    "laplace"
+]
+
+rff_features = [
+    5,
+    7,
+    10
+]
+
 scale_transform = [
     .01, .1,
     1
@@ -54,6 +65,8 @@ all_parameter_combinations = list(itertools.product(
     # needs to be treated per-usecase
     # kernel_pde_scaling,
     rbf_sigma,
+    rff_metric,
+    rff_features,
     # Below are handled separately
     # kernel_C,
     # kernel_Gamma
@@ -62,12 +75,12 @@ all_parameter_combinations = list(itertools.product(
 
 _datasets = [
             # 'ArticularyWordRecognition',
-            # 'BasicMotions',
+            # 'BasicMotions', x
             # 'Cricket',
             # 'ERing', fixme: does not load
-            # 'Libras',
-            # 'NATOPS',
-            # 'RacketSports',
+            # 'Libras', x
+            # 'NATOPS', x
+            # 'RacketSports', x
             # 'FingerMovements',
             # 'Heartbeat',
             # 'SelfRegulationSCP1',

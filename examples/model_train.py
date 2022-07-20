@@ -1,10 +1,11 @@
 import argparse
 import copy
 import pickle
+import random
+import sys
 from collections import defaultdict
 from time import sleep
 
-import numpy as np
 import torch
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import LabelEncoder
@@ -13,8 +14,9 @@ from sklearn.svm import SVC
 import sigkernel
 from examples.data_loader import CustomDataLoader
 from examples.global_config import DEFAULT_KERNEL_HYPERPARAMS, PDE_LAMBDAS, all_parameter_combinations
+from examples.utils import exit_after, set_all_seeds
 from sigkernel.general_sig_functions import rayleigh_rv_quad, benchmark_finite_diff_impl, const_weight_kernel, \
-    const_exp_kernel, uniform_rv_quad
+    uniform_rv_quad
 
 pde_impls = {
     "benchmark": benchmark_finite_diff_impl,
@@ -25,10 +27,13 @@ pde_impls = {
 }
 
 
-def _inner_train(sigma, pde_impl, x_train, svc_parameters, y_train):
+@exit_after(120)
+def _inner_train(rff_features, rff_metric, sigma, pde_impl, x_train, svc_parameters, y_train):
     try:
         # define static kernel
-        static_kernel = sigkernel.sigkernel.RBFKernel(sigma=sigma)
+        # static_kernel = sigkernel.sigkernel.RBFKernel(sigma=sigma)
+        static_kernel = sigkernel.sigkernel.RFFKernel(dims=rff_features, metric=rff_metric, gamma=sigma, length=x_train.size(dim=2))
+        # static_kernel = sigkernel.sigkernel.TensorSketchKernel()
 
         # initialize corresponding signature PDE kernel
         signature_kernel = sigkernel.sigkernel.SigKernel(pde_impl, static_kernel, dyadic_order=0, _naive_solver=True)
@@ -76,7 +81,7 @@ def get_new_xy_train_ts(x_train_const, y_train_const):
     return x_train, y_train
 
 
-def train(dataset):
+def train(dataset, seed):
     # store best models in training phase
     try:
         with open('../results/trained_models.pkl', 'rb') as file:
@@ -93,9 +98,9 @@ def train(dataset):
     for pde_impl_name, pde_impl_func in pde_impls.items():
         model_name = 'signature pde {}'.format(pde_impl_name)
         for _p_count, params_set in enumerate(all_parameter_combinations):
-            if _p_count not in (29, 30, 31, 32, 33, 34, 35, 36) and (best_scores_train[model_name] != 1.0):
+            if best_scores_train[model_name] != 1.0:
 
-                _add_time, _ts_scale_factor, _add_ll, _rbf_sigma = params_set
+                _add_time, _ts_scale_factor, _add_ll, _rbf_sigma, _rff_metric, _rff_features = params_set
 
                 print("Training model {} using parameters: {}".format(pde_impl_name, params_set))
                 print("Test {} of {}".format(_p_count, total_param_count))
@@ -117,12 +122,17 @@ def train(dataset):
 
                 kernel_pde_set = [1.] if pde_impl_name in ("benchmark", "quad", "uniform") else PDE_LAMBDAS
                 for pde_scale in kernel_pde_set:
-                    svc_model = _inner_train(_rbf_sigma, pde_impl_func(pde_scale), x_train, svc_parameters, y_train)
-                    if svc_model and svc_model.best_score_ > best_scores_train[model_name]:
-                        update_best_score(
-                            model_name, dataset.ds_name, best_scores_train, trained_models, svc_model,
-                            params_tuple=(_add_time, _add_ll, _ts_scale_factor, _rbf_sigma, pde_scale, svc_model)
-                        )
+
+                    try:
+                        svc_model = _inner_train(_rff_features, _rff_metric, _rbf_sigma, pde_impl_func(pde_scale),
+                                                 x_train, svc_parameters, y_train)
+                        if svc_model and svc_model.best_score_ > best_scores_train[model_name]:
+                            update_best_score(
+                                model_name, dataset.ds_name, best_scores_train, trained_models, svc_model,
+                                params_tuple=(seed, _add_time, _add_ll, _ts_scale_factor, _rbf_sigma, pde_scale, svc_model)
+                            )
+                    except KeyboardInterrupt as error:
+                        print("Iteration failed due to timeout")
     # save trained models
     with open('../results/trained_models.pkl', 'wb') as file:
         pickle.dump(trained_models, file)
@@ -134,7 +144,10 @@ def train(dataset):
 def run(ds_name, dataset_pctg):
     data_loader = CustomDataLoader(dataset_pctg=dataset_pctg)
     dataset = data_loader.load_ds(ds_name)
-    train(dataset)
+
+    seed = random.randrange(sys.maxsize)
+    set_all_seeds(seed)
+    train(dataset, seed)
 
 
 if __name__ == '__main__':
