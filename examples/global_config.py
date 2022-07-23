@@ -2,6 +2,9 @@ import itertools
 
 import numpy as np
 
+from sigkernel.general_sig_functions import benchmark_finite_diff_impl, const_weight_kernel, rayleigh_rv_quad, \
+    uniform_rv_quad
+
 _allow_cuda = False
 
 _kernels =  [
@@ -71,6 +74,14 @@ all_parameter_combinations = list(itertools.product(
     # kernel_C,
     # kernel_Gamma
 ))
+
+model_impls = {
+    "benchmark": benchmark_finite_diff_impl,
+    "const": const_weight_kernel,
+    # "exp": const_exp_kernel,
+    "quad": rayleigh_rv_quad,
+    "uniform": uniform_rv_quad
+}
 
 
 _datasets = [

@@ -1,6 +1,5 @@
 import argparse
 import copy
-import pickle
 from time import sleep
 
 import torch
@@ -8,36 +7,20 @@ from sklearn.preprocessing import LabelEncoder
 
 import sigkernel
 from examples.data_loader import CustomDataLoader
-from sigkernel.general_sig_functions import rayleigh_rv_quad, benchmark_finite_diff_impl, const_weight_kernel, \
-    uniform_rv_quad
-
-pde_impls = {
-    "benchmark": benchmark_finite_diff_impl,
-    "const": const_weight_kernel,
-    # "exp": const_exp_kernel,
-    "quad": rayleigh_rv_quad,
-    "uniform": uniform_rv_quad
-}
+from examples.global_config import model_impls
+from examples.utils import ModelStorage, set_all_seeds
 
 
-def test(dataset):
-    # load trained models
-    try:
-        with open('../results/trained_models.pkl', 'rb') as file:
-            trained_models = pickle.load(file)
-    except:
-        print('Models need to be trained first')
+def extract_model_params(db_storage, model_name, ds_name):
+    trained_model_params = db_storage.find_model_results(model_name, ds_name)
+    return (trained_model_params[k] for k in [
+        "_add_time", "_add_ll", "_ts_scale_factor", "_rbf_sigma", "pde_scale", "estimator"
+    ])
 
-    # load final results from last run
-    try:
-        with open('../results/final_results.pkl', 'rb') as file:
-            final_results = pickle.load(file)
-    except:
-        final_results = {}
-
+def test(dataset, db_storage):
     x_train_const, y_train_const, x_test_const, y_test_const = dataset.x_train, dataset.y_train, dataset.x_test, dataset.y_test
 
-    for pde_impl_name, pde_impl_func in pde_impls.items():
+    for pde_impl_name, pde_impl_func in model_impls.items():
         print("Testing using : {}".format(pde_impl_name))
         model_name = 'signature pde {}'.format(pde_impl_name)
 
@@ -53,7 +36,10 @@ def test(dataset):
         y_test = LabelEncoder().fit_transform(y_test)
 
         # extract information from training phase
-        _add_time, _add_ll, _ts_scale_factor, _rbf_sigma, pde_scale, estimator, _ = trained_models[(dataset.ds_name, model_name)]
+        (_add_time, _add_ll, _ts_scale_factor,
+        _rbf_sigma, pde_scale, estimator, _) = extract_model_params(db_storage,
+            model_name, dataset.ds_name
+        )
 
         # path-transform and subsampling
         x_train = sigkernel.transform(x_train, at=_add_time, ll=_add_ll, scale=_ts_scale_factor)
@@ -93,20 +79,22 @@ def test(dataset):
 
         print('\n')
 
-    # save results
-    with open('../results/final_results.pkl', 'wb') as file:
-        pickle.dump(final_results, file)
 
-
-def run(ds_name, dataset_pctg):
+def run(ds_name, dataset_pctg, seed):
     data_loader = CustomDataLoader(dataset_pctg=dataset_pctg)
     dataset = data_loader.load_ds(ds_name)
-    test(dataset)
+
+    set_all_seeds(seed)
+    db_file_name = "./{}_{}.results".format(ds_name, seed)
+    db_storage = ModelStorage(db_file_name)
+
+    test(dataset, db_storage)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--ds_name', help='Dataset name')
+    parser.add_argument('--seed', type=int, help='Use fixed seed instead of a random one')
     parser.add_argument('--dataset_pctg', default=1.0, type=float, help='Fraction of available data to be used')
     args = parser.parse_args()
-    run(args.ds_name, args.dataset_pctg)
+    run(args.ds_name, args.dataset_pctg, args.seed)
