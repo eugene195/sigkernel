@@ -1,5 +1,6 @@
 import argparse
 import copy
+import pickle
 import random
 from collections import defaultdict
 from time import sleep
@@ -20,7 +21,8 @@ def _inner_train(rff_features, rff_metric, sigma, pde_impl, x_train, svc_paramet
     try:
         # define static kernel
         # static_kernel = sigkernel.sigkernel.RBFKernel(sigma=sigma)
-        static_kernel = sigkernel.sigkernel.RFFKernel(dims=rff_features, metric=rff_metric, gamma=sigma, length=x_train.size(dim=2))
+        static_kernel = sigkernel.sigkernel.RFFKernel(dims=int(rff_features * x_train.size(dim=2)), metric=rff_metric,
+                                                      gamma=sigma, length=x_train.size(dim=2))
         # static_kernel = sigkernel.sigkernel.TensorSketchKernel()
 
         # initialize corresponding signature PDE kernel
@@ -47,8 +49,9 @@ def _inner_train(rff_features, rff_metric, sigma, pde_impl, x_train, svc_paramet
         return None
 
 
-def update_best_score(db_storage, model_name, ds_name, params_dict):
-    db_storage.insert_model_results(model_name=model_name, ds_name=ds_name, params_dict=params_dict)
+def update_best_score(db_storage, model_name, ds_name, params_dict, model_pkl):
+    db_storage.insert_model_results(model_name=model_name, ds_name=ds_name,
+                                    params_dict=params_dict, model_pkl=model_pkl)
 
 
 def get_new_xy_train_ts(x_train_const, y_train_const):
@@ -76,7 +79,7 @@ def train(dataset, seed, db_storage):
         db_storage.insert_model(model_name)
         model_progress = db_storage.find_model_progress(model_name, dataset.ds_name, not_found_raise=False)
         if model_progress:
-            trained_model_params = db_storage.find_model_results(model_name, dataset.ds_name)
+            trained_model_params, _ = db_storage.find_model_results(model_name, dataset.ds_name)
             best_scores_train[model_name] = trained_model_params["_best_score"]
 
         for _p_count, params_set in enumerate(all_parameter_combinations):
@@ -112,6 +115,7 @@ def train(dataset, seed, db_storage):
                         if svc_model and svc_model.best_score_ > best_scores_train[model_name]:
                             _best_score = svc_model.best_score_
                             best_scores_train[model_name] = _best_score
+                            svc_model_pkl = pickle.dumps(svc_model, pickle.HIGHEST_PROTOCOL)
                             local_vars = vars()
                             params_dict = {
                                 x: local_vars[x]
@@ -124,7 +128,7 @@ def train(dataset, seed, db_storage):
                                                                        svc_model.best_score_))
                             print("Parameters {}".format(params_dict))
                             print()
-                            update_best_score(db_storage, model_name, dataset.ds_name, params_dict)
+                            update_best_score(db_storage, model_name, dataset.ds_name, params_dict, svc_model_pkl)
                     except KeyboardInterrupt as error:
                         print("Iteration failed due to timeout")
                         raise

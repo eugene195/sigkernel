@@ -33,9 +33,9 @@ rff_metric = [
 ]
 
 rff_features = [
-    5,
-    7,
-    10
+    .25,
+    .5,
+    .75
 ]
 
 scale_transform = [

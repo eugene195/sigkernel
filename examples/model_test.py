@@ -12,14 +12,16 @@ from examples.utils import ModelStorage, set_all_seeds
 
 
 def extract_model_params(db_storage, model_name, ds_name):
-    trained_model_params = db_storage.find_model_results(model_name, ds_name)
-    return (trained_model_params[k] for k in [
-        "_add_time", "_add_ll", "_ts_scale_factor", "_rbf_sigma", "pde_scale", "estimator"
-    ])
+    trained_model_params, model_pkl = db_storage.find_model_results(model_name, ds_name)
+    return (
+        trained_model_params[k] for k in (
+            "seed", "_add_time", "_add_ll", "_ts_scale_factor", "_rbf_sigma",
+            "pde_scale", "_best_score", "_rff_metric", "_rff_features"
+    )), model_pkl
 
 def test(dataset, db_storage):
     x_train_const, y_train_const, x_test_const, y_test_const = dataset.x_train, dataset.y_train, dataset.x_test, dataset.y_test
-
+    final_results = {}
     for pde_impl_name, pde_impl_func in model_impls.items():
         print("Testing using : {}".format(pde_impl_name))
         model_name = 'signature pde {}'.format(pde_impl_name)
@@ -36,10 +38,10 @@ def test(dataset, db_storage):
         y_test = LabelEncoder().fit_transform(y_test)
 
         # extract information from training phase
-        (_add_time, _add_ll, _ts_scale_factor,
-        _rbf_sigma, pde_scale, estimator, _) = extract_model_params(db_storage,
-            model_name, dataset.ds_name
-        )
+        (
+            seed, _add_time, _add_ll, _ts_scale_factor, _rbf_sigma, pde_scale,
+            _best_score, _rff_metric, _rff_features
+        ), estimator = extract_model_params(db_storage, model_name, dataset.ds_name)
 
         # path-transform and subsampling
         x_train = sigkernel.transform(x_train, at=_add_time, ll=_add_ll, scale=_ts_scale_factor)
@@ -53,7 +55,9 @@ def test(dataset, db_storage):
         x_test = torch.tensor(x_test, dtype=dtype, device=device)
 
         # define static kernel
-        static_kernel = sigkernel.sigkernel.RBFKernel(sigma=_rbf_sigma)
+        # static_kernel = sigkernel.sigkernel.RBFKernel(sigma=_rbf_sigma)
+        static_kernel = sigkernel.sigkernel.RFFKernel(dims=int(_rff_features * x_train.size(dim=2)), metric=_rff_metric,
+                                                      gamma=_rbf_sigma, length=x_test.size(dim=2))
 
         # initialize corresponding signature PDE kernel
         signature_kernel = sigkernel.sigkernel.SigKernel(
@@ -63,9 +67,10 @@ def test(dataset, db_storage):
         # compute Gram matrix on test data
         # fixme?? x_test, x_train because we're using precomputed gram from x_train
         G_test = signature_kernel.compute_Gram(x_test, x_train, sym=False).cpu().numpy()
+        G_train = signature_kernel.compute_Gram(x_train, x_train, sym=False).cpu().numpy()
 
         # record scores
-        train_score = estimator.best_score_
+        train_score = estimator.score(G_train, y_train)
         test_score = estimator.score(G_test, y_test)
         final_results[(dataset.ds_name, model_name)] = {f'training accuracy: {train_score} %',
                                                         f'testing accuracy: {test_score} %'}

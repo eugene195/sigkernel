@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import json
 import os
+import pickle
 import random
 import sqlite3
 from sqlite3 import Error
@@ -90,6 +91,7 @@ class ModelStorage:
                   "model_params json, "
                   "dataset_id integer NOT NULL,"
                   "model_id integer NOT NULL,"
+                  "model_pkl pickle, "
                   "FOREIGN KEY(dataset_id) REFERENCES datasets(id)"
                   "FOREIGN KEY(model_id) REFERENCES models(id)"
                   "CONSTRAINT unq UNIQUE (model_id, dataset_id)"
@@ -136,19 +138,22 @@ class ModelStorage:
         # model params are in pos 1
         res = None
         try:
-            res = json.loads(records[0][1])
+            model_params = json.loads(records[0][1])
+            model_pkl = pickle.loads(records[0][4])
+            res = (model_params, model_pkl)
         except IndexError:
             if not_found_raise:
                 raise
         return res
 
-    def insert_model_results(self, model_name, ds_name, params_dict,):
+    def insert_model_results(self, model_name, ds_name, params_dict, model_pkl):
         c = self.conn.cursor()
 
         model_id, _ = self.find_model_by_name(model_name)[0]
         dataset_id, _ = self.find_ds_by_name(ds_name)[0]
-        c.execute("insert OR REPLACE into model_results (dataset_id, model_id, model_params) values (?, ?, ?)",
-                  (dataset_id, model_id, json.dumps(params_dict), ))
+        c.execute("insert OR REPLACE into model_results (dataset_id, model_id, model_params, model_pkl) "
+                  "values (?, ?, ?, ?)",
+                  (dataset_id, model_id, json.dumps(params_dict), sqlite3.Binary(model_pkl), ))
         self.conn.commit()
 
     def update_model_progress(self, model_name, ds_name, iteration):
