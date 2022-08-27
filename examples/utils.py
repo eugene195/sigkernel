@@ -175,7 +175,7 @@ class ModelStorage:
         c.execute("SELECT * FROM model_progress WHERE dataset_id=? AND model_id=?",
                   (dataset_id, model_id))
         records = c.fetchall()
-        res = 0
+        res = -1
         try:
             res = records[0][1]
         except IndexError:

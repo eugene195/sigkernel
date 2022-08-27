@@ -29,13 +29,14 @@ add_time_axis = [
 ]
 rff_metric = [
     "rbf",
-    "laplace"
+    # "laplace"
 ]
 
 rff_features = [
     .25,
     .5,
-    .75
+    .75,
+    .90
 ]
 
 scale_transform = [
@@ -48,7 +49,7 @@ add_lead_lag = [
 ]
 # kernel_pde_scaling = [1e-3, 7.5e-2, 1e-1, 0.5, 1., 5., 10.]
 rbf_sigma = [
-    # 1e-3, 5e-3,
+    1e-3, 5e-3,
     1e-2,
     2.5e-2, 5e-2, 7.5e-2,
     1e-1,
@@ -57,7 +58,8 @@ rbf_sigma = [
     7.5e-1,
     1.,
     2., 5.,
-    10.]
+    10.
+]
 # kernel_C = np.logspace(0, 4, 5)
 # kernel_Gamma = list(np.logspace(-4, 4, 9)) + ['auto']
 
@@ -68,15 +70,12 @@ all_parameter_combinations = list(itertools.product(
     # needs to be treated per-usecase
     # kernel_pde_scaling,
     rbf_sigma,
-    rff_metric,
-    rff_features,
-    # Below are handled separately
-    # kernel_C,
-    # kernel_Gamma
+    # rff_metric,
+    # rff_features,
 ))
 
 model_impls = {
-    "benchmark": benchmark_finite_diff_impl,
+    # "benchmark": benchmark_finite_diff_impl,
     "const": const_weight_kernel,
     # "exp": const_exp_kernel,
     "quad": rayleigh_rv_quad,
