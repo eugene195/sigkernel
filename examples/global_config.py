@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 
-from sigkernel.general_sig_functions import benchmark_finite_diff_impl, const_weight_kernel, rayleigh_rv_quad, \
+from sigkernel.general_sig_functions import const_weight_kernel, rayleigh_rv_quad, \
     uniform_rv_quad
 
 _allow_cuda = False
@@ -29,14 +29,14 @@ add_time_axis = [
 ]
 rff_metric = [
     "rbf",
-    # "laplace"
+    "laplace"
 ]
 
 rff_features = [
     .25,
     .5,
-    .75,
-    .90
+    # .75,
+    # .90
 ]
 
 scale_transform = [
@@ -57,7 +57,8 @@ rbf_sigma = [
     5e-1,
     7.5e-1,
     1.,
-    2., 5.,
+    2.,
+    5.,
     10.
 ]
 # kernel_C = np.logspace(0, 4, 5)
@@ -70,8 +71,8 @@ all_parameter_combinations = list(itertools.product(
     # needs to be treated per-usecase
     # kernel_pde_scaling,
     rbf_sigma,
-    # rff_metric,
-    # rff_features,
+    rff_metric,
+    rff_features,
 ))
 
 model_impls = {

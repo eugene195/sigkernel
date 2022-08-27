@@ -13,7 +13,8 @@ from sklearn.svm import SVC
 import sigkernel
 from examples.data_loader import CustomDataLoader
 from examples.global_config import DEFAULT_KERNEL_HYPERPARAMS
-from examples.model_classes import BenchmarkModel, ConstScalingModel, RayleighRVModel, UniformRVModel, RBFStaticKernel
+from examples.model_classes import BenchmarkModel, ConstScalingModel, RayleighRVModel, UniformRVModel, RBFStaticKernel, \
+    RFF_RBFKernel
 from examples.model_train import update_best_score
 from examples.utils import set_all_seeds, ModelStorage
 
@@ -30,7 +31,7 @@ def get_classifier_ts(x_const, y_const):
     return x_, y_
 
 
-def train_model(ds_name, _x_train, y_train, seed, model, static_kernel, db_storage):
+def train_model(ds_name, _x_train, y_train, _x_test, _y_test, seed, model, static_kernel, db_storage):
     best_scores_train = defaultdict(float)
     _model_name = 'signature pde {}'.format(model.model_name)
     db_storage.insert_model(_model_name)
@@ -51,7 +52,7 @@ def train_model(ds_name, _x_train, y_train, seed, model, static_kernel, db_stora
     for p_count, bundle in enumerate(bundles):
         params_dict = dict(zip(p_keys, bundle))
         params_dict["seed"] = seed
-        if (best_scores_train[_model_name] != 1.0) and (model_progress < p_count):
+        if (best_scores_train[_model_name] != 1.0) and (model_progress < p_count) and (p_count not in [313, 583]):
             print("Training model {} using parameters: {}".format(model.model_name, params_dict))
             print("Test {} of {}".format(p_count, len(list(bundles))))
             x_train = copy.deepcopy(x_train_const)
@@ -80,6 +81,15 @@ def train_model(ds_name, _x_train, y_train, seed, model, static_kernel, db_stora
             print("Model score: {}".format(svc_model.best_score_))
 
             if svc_model and svc_model.best_score_ > best_scores_train[_model_name]:
+                # x_test = copy.deepcopy(_x_test)
+                # x_test = sigkernel.transform(x_test,
+                #                              at=params_dict["add_time_axis"],
+                #                              ll=params_dict["add_lead_lag"],
+                #                              scale=params_dict["scale_transform"])
+                # x_test = torch.tensor(x_test, dtype=torch.float64, device='cpu')
+                # G_test = signature_kernel.compute_Gram(x_test, x_train, sym=False).cpu().numpy()
+                # test_score = svc_model.score(G_test, _y_test)
+
                 _best_score = svc_model.best_score_
                 best_scores_train[_model_name] = _best_score
                 svc_model_pkl = pickle.dumps(svc_model, pickle.HIGHEST_PROTOCOL)
@@ -89,12 +99,13 @@ def train_model(ds_name, _x_train, y_train, seed, model, static_kernel, db_stora
                                                            svc_model.best_score_))
                 print("Parameters {}".format(params_dict))
                 print()
+                # print("Test Score: {}".format(test_score))
                 update_best_score(db_storage, _model_name, ds_name, params_dict, svc_model_pkl)
 
             db_storage.update_model_progress(model_name=_model_name, ds_name=ds_name, iteration=p_count)
 
 
-def test_model(ds_name, x_test, x_train, y_test,  model, static_kernel, db_storage):
+def test_model(ds_name, x_train, y_train, x_test, y_test,  model, static_kernel, db_storage):
     print("Testing using : {}".format(model.model_name))
     model_name = 'signature pde {}'.format(model.model_name)
     final_results = {}
@@ -112,9 +123,9 @@ def test_model(ds_name, x_test, x_train, y_test,  model, static_kernel, db_stora
     x_test = torch.tensor(x_test, dtype=torch.float64, device='cpu')
 
     # initialize corresponding signature PDE kernel
-    signature_kernel = sigkernel.sigkernel.SigKernel(
-        model.get_model_impl(params_dict), static_kernel.get_kernel(params_dict), dyadic_order=0, _naive_solver=True
-    )
+    signature_kernel = sigkernel.sigkernel.SigKernel(model.get_model_impl(params_dict),
+                                                     static_kernel.get_kernel(params_dict),
+                                                     dyadic_order=0, _naive_solver=True)
 
     # compute Gram matrix on test data
     # fixme?? x_test, x_train because we're using precomputed gram from x_train
@@ -125,9 +136,17 @@ def test_model(ds_name, x_test, x_train, y_test,  model, static_kernel, db_stora
     test_score = fitted_model_instance.score(G_test, y_test)
     final_results[(ds_name, model_name)] = {f'training accuracy: {train_score} %', f'testing accuracy: {test_score} %'}
 
+    G_train_ = signature_kernel.compute_Gram(x_train, x_train, sym=True).cpu().numpy()
+    svc = SVC(kernel='precomputed', decision_function_shape='ovo')
+    svc_model = GridSearchCV(estimator=svc, param_grid=DEFAULT_KERNEL_HYPERPARAMS, cv=5, n_jobs=-1)
+    svc_model.fit(G_train_, y_train)
+
+    alt_test_score = svc_model.score(G_test, y_test)
+
     # empty memory
     del G_test
-    print(ds_name, model_name, f'training accuracy: {train_score} %', f'testing accuracy: {test_score} %')
+    print(ds_name, model_name, f'training accuracy: {train_score} %', f'testing accuracy: {test_score} %',
+          f'Alternative test score: {alt_test_score}')
     print('\n')
 
 
@@ -148,14 +167,19 @@ def run(ds_name, dataset_pctg, seed=None, is_train=True):
     x_train, y_train = get_classifier_ts(dataset.x_train, dataset.y_train)
     x_test, y_test = get_classifier_ts(dataset.x_test, dataset.y_test)
 
-    for _model in [BenchmarkModel(), ConstScalingModel(), RayleighRVModel(), UniformRVModel()]:
+    for _model in [
+        BenchmarkModel(),
+        ConstScalingModel(),
+        RayleighRVModel(),
+        UniformRVModel()
+    ]:
         if is_train:
-            train_model(ds_name, x_train, y_train, seed,
-                        model=_model, static_kernel=RBFStaticKernel(),
+            train_model(ds_name, x_train, y_train, x_test, y_test, seed,
+                        model=_model, static_kernel=RFF_RBFKernel(x_train.shape[2] + 1),
                         db_storage=db_storage)
         else:
-            test_model(ds_name, x_test, x_train, y_test,
-                       model=_model,  static_kernel=RBFStaticKernel(),
+            test_model(ds_name, x_train, y_train, x_test, y_test,
+                       model=_model,  static_kernel=RFF_RBFKernel(x_test.shape[2] + 1),
                        db_storage=db_storage)
 
 
