@@ -20,7 +20,7 @@ DEFAULT_KERNEL_HYPERPARAMS = {'C': np.logspace(0, 4, 5), 'gamma': list(np.logspa
 # DEFAULT_KERNEL_HYPERPARAMS = {'C': np.logspace(0, 4, 3), 'gamma': list(np.logspace(-4, 4, 5)) + ['auto']}
 
 
-PDE_LAMBDAS = [1e-3, 7.5e-2, 1e-1, 0.5, 1., 5., 10.]
+PDE_LAMBDAS = [1e-5, 1e-4, 1e-3, 5e-3, 1e-2, 7.5e-2, 1e-1, 0.5, 7.5e-1, 1., 2.]
 
 
 add_time_axis = [
@@ -47,7 +47,7 @@ add_lead_lag = [
     # True,
     False
 ]
-# kernel_pde_scaling = [1e-3, 7.5e-2, 1e-1, 0.5, 1., 5., 10.]
+
 rbf_sigma = [
     1e-3, 5e-3,
     1e-2,

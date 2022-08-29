@@ -3,7 +3,7 @@ import numpy as np
 from examples.global_config import add_time_axis, scale_transform, add_lead_lag, PDE_LAMBDAS, rbf_sigma, rff_features, \
     rff_metric
 from sigkernel.general_sig_functions import benchmark_finite_diff_impl, const_weight_kernel, rayleigh_rv_quad, \
-    uniform_rv_quad
+    uniform_rv_quad, const_exp_kernel
 import sigkernel
 
 
@@ -34,7 +34,7 @@ class BenchmarkModel(BaseModel):
 
 class ConstScalingModel(BaseModel):
     def __init__(self):
-        super().__init__(const_weight_kernel, "const")
+        super().__init__(const_exp_kernel, "const")
         self.model_params["pde_lambda"] = PDE_LAMBDAS
 
     def get_model_impl(self, params_dict):
