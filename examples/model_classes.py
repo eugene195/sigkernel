@@ -1,10 +1,10 @@
 import numpy as np
 
-from examples.global_config import add_time_axis, scale_transform, add_lead_lag, PDE_LAMBDAS, rbf_sigma, rff_features, \
-    rff_metric
-from sigkernel.general_sig_functions import benchmark_finite_diff_impl, const_weight_kernel, rayleigh_rv_quad, \
-    uniform_rv_quad, const_exp_kernel
 import sigkernel
+from examples.global_config import add_time_axis, scale_transform, add_lead_lag, PDE_LAMBDAS, rbf_sigma, rff_metric, \
+    rff_use_offset
+from sigkernel.general_sig_functions import benchmark_finite_diff_impl, rayleigh_rv_quad, \
+    uniform_rv_quad, const_exp_kernel
 
 
 class BaseModel:
@@ -85,12 +85,59 @@ class RBFStaticKernel(BaseStaticKernel):
         return sigkernel.sigkernel.RBFKernel(sigma=params_dict["rbf_sigma"])
 
 
+class LaplaceStaticKernel(BaseStaticKernel):
+    def get_kernel(self, params_dict):
+        return sigkernel.sigkernel.LaplaceKernel(sigma=params_dict["rbf_sigma"])
+
+
+class RFF_linearize(BaseStaticKernel):
+    def __init__(self, data_shape):
+        super().__init__()
+        base_feature_count = np.prod(data_shape[1:])
+        self.kernel_params["data_shape"] = [data_shape]
+        self.kernel_params["rff_features"] = [
+            np.min([5, base_feature_count]), np.min([10, base_feature_count]), np.min([25, base_feature_count])
+        ]
+        self.kernel_params["rff_metric"] = rff_metric
+        self.kernel_params["rff_use_offset"] = rff_use_offset
+
+    def get_kernel(self, params_dict):
+        data_shape = self.kernel_params["data_shape"]
+        return sigkernel.sigkernel.RFFKernel_1(
+            rff_features=params_dict["rff_features"], sigma=params_dict["rbf_sigma"],
+            metric=params_dict["rff_metric"], use_offset=params_dict["rff_use_offset"],
+            data_shape=data_shape, linearize_data=True
+        )
+
+
+class RFF_standard(BaseStaticKernel):
+    def __init__(self, data_shape):
+        super().__init__()
+        self.kernel_params["data_shape"] = [data_shape]
+        self.kernel_params["rff_features"] = list({
+            np.ceil(np.sqrt(data_shape[-1])),
+            np.ceil(0.25 * data_shape[-1]),
+            # np.ceil(0.5 * data_shape[-1]),
+            # np.ceil(0.75 * data_shape[-1])
+        })
+        self.kernel_params["rff_metric"] = rff_metric
+        self.kernel_params["rff_use_offset"] = rff_use_offset
+
+    def get_kernel(self, params_dict):
+        data_shape = self.kernel_params["data_shape"]
+        return sigkernel.sigkernel.RFFKernel_1(
+            rff_features=params_dict["rff_features"], sigma=params_dict["rbf_sigma"],
+            metric=params_dict["rff_metric"], use_offset=params_dict["rff_use_offset"],
+            data_shape=data_shape, linearize_data=False
+        )
+
+
 class RFF_RBFKernel(BaseStaticKernel):
     def __init__(self, n_features):
         super().__init__()
         self.kernel_params["n_features"] = [n_features]
         # self.kernel_params["rff_features"] = rff_features
-        self.kernel_params["rff_features"] = [int(np.ceil(np.sqrt(n_features)))]
+        self.kernel_params["rff_features"] = [10, 25, 50, 100]
         self.kernel_params["rff_metric"] = rff_metric
 
     def get_kernel(self, params_dict):

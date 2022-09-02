@@ -32,6 +32,11 @@ rff_metric = [
     "laplace"
 ]
 
+rff_use_offset = [
+    True,
+    False
+]
+
 rff_features = [
     .25,
     .5,
@@ -40,7 +45,9 @@ rff_features = [
 ]
 
 scale_transform = [
-    .01, .1,
+    # .001,
+    .01,
+    .1,
     1
 ]
 add_lead_lag = [
@@ -58,8 +65,6 @@ rbf_sigma = [
     7.5e-1,
     1.,
     2.,
-    5.,
-    10.
 ]
 # kernel_C = np.logspace(0, 4, 5)
 # kernel_Gamma = list(np.logspace(-4, 4, 9)) + ['auto']

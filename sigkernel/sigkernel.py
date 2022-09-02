@@ -35,35 +35,50 @@ class LinearKernel():
         return torch.einsum('ipk,jqk->ijpq', X, Y)
 
 
-class TensorSketchKernel:
+class RFFKernel_1:
+    def __init__(self, rff_features, sigma, metric, data_shape, use_offset, linearize_data=False):
+        self.use_offset = use_offset
+        self.metric = metric
+        self.sigma = sigma
+        self.rff_features = int(rff_features)
+        self.linearize_data = linearize_data
+        if not self.linearize_data:
+            self.dimensions = data_shape[-1]
+        else:
+            self.dimensions = np.prod(data_shape[1:])
+        if self.sigma == 'auto':
+            self.sigma = 1.0 / data_shape[1]
 
-    def __init__(self, degree=3, gamma=1., dims=20):
-        self.ps = PolynomialCountSketch(degree=degree, gamma=gamma, n_components=dims)
+        self.b, self.w = self.fit()
 
-    def transform(self, X):
-        return torch.from_numpy(self.ps.fit_transform(X))
+    def fit(self):
+        if self.metric == "rbf":
+            w = np.sqrt(2 * self.sigma) * np.random.normal(size=(self.rff_features, self.dimensions))
+        elif self.metric == "laplace":
+            w = cauchy.rvs(scale=self.sigma, size=(self.rff_features, self.dimensions))
+        else:
+            raise ValueError("Only laplace and rbf kernels are supported for RFF")
+        b = 2 * np.pi * np.random.rand(self.rff_features)
+        return torch.from_numpy(b), torch.from_numpy(w)
 
-    def batch_kernel(self, X, Y):
-        """Input:
-                  - X: torch tensor of shape (batch, length_X, dim),
-                  - Y: torch tensor of shape (batch, length_Y, dim)
-           Output:
-                  - matrix k(X^i_s,Y^i_t) of shape (batch, length_X, length_Y)
-        """
-        X_z = torch.stack([self.transform(x) for x in X])
-        Y_z = torch.stack([self.transform(y) for y in Y])
-        return torch.bmm(X_z, Y_z.permute(0, 2, 1))
+    def transform(self, data):
+        result = matrix_mult(data, self.w, transpose_y=True)
+        if self.use_offset:
+            result += self.b[np.newaxis, :]
+            result = np.cos(result)
+        else:
+            result = torch.tensor(np.hstack((np.cos(result), np.sin(result))))
+        return np.sqrt(2 / self.rff_features) * result
 
     def Gram_matrix(self, X, Y):
-        """Input:
-                  - X: torch tensor of shape (batch_X, length_X, dim),
-                  - Y: torch tensor of shape (batch_Y, length_Y, dim)
-           Output:
-                  - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
-        """
-        X_z = torch.stack([self.transform(x) for x in X])
-        Y_z = torch.stack([self.transform(y) for y in Y])
-        return torch.einsum('ipk,jqk->ijpq', X_z, Y_z)
+        if not self.linearize_data:
+            x_z = self.transform(X)
+            y_z = self.transform(Y)
+            return torch.einsum('ipk,jqk->ijpq', x_z, y_z)
+        else:
+            x_z = self.transform(torch.flatten(X, start_dim=1))
+            y_z = self.transform(torch.flatten(Y, start_dim=1))
+            return torch.einsum('ip,jq->ijpq', x_z, y_z)
 
 
 class RFFKernel:
@@ -82,17 +97,21 @@ class RFFKernel:
         Z = np.sqrt(2 / self.dims) * np.cos((X.mm(self.w.T) + self.u[np.newaxis, :]))
         return Z
 
-    def batch_kernel(self, X, Y):
-        """Input:
-                  - X: torch tensor of shape (batch, length_X, dim),
-                  - Y: torch tensor of shape (batch, length_Y, dim)
-           Output:
-                  - matrix k(X^i_s,Y^i_t) of shape (batch, length_X, length_Y)
-        """
-        X_z = torch.stack([self.transform(x) for x in X])
-        Y_z = torch.stack([self.transform(y) for y in Y])
-        return torch.bmm(X_z, Y_z.permute(0, 2, 1))
-
+    # def Gram_matrix(self, X, Y):
+    #     """Input:
+    #               - X: torch tensor of shape (batch_X, length_X, dim),
+    #               - Y: torch tensor of shape (batch_Y, length_Y, dim)
+    #        Output:
+    #               - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
+    #
+    #     X_z = torch.stack([self.transform(x) for x in X])
+    #     Y_z = torch.stack([self.transform(y) for y in Y])
+    #
+    #     """
+    #     Xs = self.transform(torch.tensor(vectorise_data(X.detach().numpy())))
+    #     Ys = self.transform(torch.tensor(vectorise_data(Y.detach().numpy())))
+    #     return torch.einsum('ip,jq->ijpq', Xs, Ys)
+    #
     def Gram_matrix(self, X, Y):
         """Input:
                   - X: torch tensor of shape (batch_X, length_X, dim),
@@ -100,9 +119,12 @@ class RFFKernel:
            Output:
                   - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
         """
-        X_z = torch.stack([self.transform(x) for x in X])
-        Y_z = torch.stack([self.transform(y) for y in Y])
-        return torch.einsum('ipk,jqk->ijpq', X_z, Y_z)
+        self.length = X.shape[0]
+        self.u, self.w = self._fit()
+
+        Xs = np.sqrt(2 / self.dims) * torch.einsum('ipk,ji->jpk', X, self.w)  + self.u[ :, np.newaxis,np.newaxis]
+        Ys = np.sqrt(2 / self.dims) * torch.einsum('ipk,ji->jpk', Y, self.w)  + self.u[ :, np.newaxis,np.newaxis]
+        return torch.einsum('ipk,jqk->ijpq', Xs, Ys)
 
     def _fit(self):
         if self.metric == "rbf":
@@ -113,6 +135,15 @@ class RFFKernel:
         # Generate D iid samples from Uniform(0,2*pi)
         u = 2 * np.pi * np.random.rand(self.dims)
         return torch.from_numpy(u), torch.from_numpy(w)
+
+def vectorise_data(data):
+    return np.array([data[n, :, :].reshape((data.shape[1] * data.shape[2], )) for n in range(data.shape[0])])
+
+
+def matrix_mult(x, y=None, transpose_x=False, transpose_y=False):
+    subscript_x = '...ji' if transpose_x else '...ij'
+    subscript_y = '...kj' if transpose_y else '...jk'
+    return torch.einsum(f'{subscript_x},{subscript_y}->...ik', x, y if y is not None else x)
 
 
 class RBFKernel():
@@ -154,6 +185,22 @@ class RBFKernel():
         dist += torch.reshape(Xs, (A, 1, M, 1)) + torch.reshape(Ys, (1, B, 1, N))
         return torch.exp(-dist / self.sigma)
 
+
+class LaplaceKernel:
+    """Laplace kernel k: R^d x R^d -> R"""
+
+    def __init__(self, sigma):
+        self.sigma = sigma
+
+    def Gram_matrix(self, X, Y):
+        """Input:
+                  - X: torch tensor of shape (batch_X, length_X, dim),
+                  - Y: torch tensor of shape (batch_Y, length_Y, dim)
+           Output:
+                  - matrix k(X^i_s,Y^j_t) of shape (batch_X, batch_Y, length_X, length_Y)
+        """
+        r = torch.sum(np.abs(X[:, None, :, None] - Y[None, :, None, :]), axis=4)
+        return torch.exp(-r / self.sigma)
 
 # ===========================================================================================================
 
@@ -239,7 +286,8 @@ class _SigKernel(torch.autograd.Function):
         # computing dsdt k(X^i_s,Y^i_t)
         G_static = static_kernel.batch_kernel(X, Y)
         G_static_ = G_static[:, 1:, 1:] + G_static[:, :-1, :-1] - G_static[:, 1:, :-1] - G_static[:, :-1, 1:]
-        G_static_ = tile(tile(G_static_, 1, 2 ** dyadic_order) / float(2 ** dyadic_order), 2,
+        G_static_ = tile(
+            tile(G_static_, 1, 2 ** dyadic_order) / float(2 ** dyadic_order), 2,
                          2 ** dyadic_order) / float(2 ** dyadic_order)
 
         # if on GPU
